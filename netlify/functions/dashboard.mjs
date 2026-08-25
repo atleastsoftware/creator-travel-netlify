@@ -43,6 +43,14 @@ function slugify(input) {
     .slice(0, 80) || `property-${Date.now()}`;
 }
 
+function cleanGallery(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(item => String(item || "").trim())
+    .filter(item => item.startsWith("/media/") || /^https?:\/\//i.test(item))
+    .slice(0, 12);
+}
+
 function store(name) {
   return getStore(name);
 }
@@ -65,6 +73,7 @@ async function setJSON(name, key, value) {
 async function ensureDemo() {
   const rows = await listJSON(STORES.properties);
   if (rows.length) return;
+  const cover = "https://images.unsplash.com/photo-1600047509807-ba8f99d2cdde?auto=format&fit=crop&w=1600&q=80";
   const p = {
     id: crypto.randomUUID(),
     slug: "demo-villa",
@@ -72,7 +81,8 @@ async function ensureDemo() {
     location: "Krabi",
     country: "Thailand",
     description: "A sample stay to demonstrate the creator storefront. Replace this property from the dashboard.",
-    image_url: "https://images.unsplash.com/photo-1600047509807-ba8f99d2cdde?auto=format&fit=crop&w=1600&q=80",
+    image_url: cover,
+    gallery: [cover],
     airbnb_url: "https://www.airbnb.com/",
     allow_direct: true,
     currency: "EUR",
@@ -99,6 +109,10 @@ export default async (request) => {
     if (action === "properties" && method === "GET") {
       await ensureDemo();
       const rows = (await listJSON(STORES.properties))
+        .map(p => ({
+          ...p,
+          gallery: cleanGallery(p.gallery?.length ? p.gallery : (p.image_url ? [p.image_url] : []))
+        }))
         .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
       return json(rows);
     }
@@ -115,6 +129,8 @@ export default async (request) => {
       let n = 2;
       while (all.some(p => p.slug === slug)) slug = `${baseSlug}-${n++}`;
 
+      const gallery = cleanGallery(data.gallery);
+      const imageUrl = String(data.image_url || gallery[0] || "").trim();
       const now = new Date().toISOString();
       const p = {
         id: crypto.randomUUID(),
@@ -123,7 +139,8 @@ export default async (request) => {
         location: String(data.location || "").trim(),
         country: String(data.country || "").trim(),
         description: String(data.description || "").trim(),
-        image_url: String(data.image_url || "").trim(),
+        image_url: imageUrl,
+        gallery: gallery.length ? gallery : (imageUrl ? [imageUrl] : []),
         airbnb_url: String(data.airbnb_url || "").trim(),
         allow_direct: Boolean(data.allow_direct),
         currency: String(data.currency || "EUR").toUpperCase().slice(0, 3),
@@ -147,13 +164,23 @@ export default async (request) => {
       let data = {};
       try { data = await request.json(); } catch {}
 
+      const gallery = data.gallery === undefined
+        ? cleanGallery(current.gallery?.length ? current.gallery : (current.image_url ? [current.image_url] : []))
+        : cleanGallery(data.gallery);
+      const imageUrl = String(
+        data.image_url !== undefined
+          ? data.image_url
+          : (gallery[0] || current.image_url || "")
+      ).trim();
+
       const next = {
         ...current,
         title: String(data.title ?? current.title).trim(),
         location: String(data.location ?? current.location).trim(),
         country: String(data.country ?? current.country).trim(),
         description: String(data.description ?? current.description).trim(),
-        image_url: String(data.image_url ?? current.image_url).trim(),
+        image_url: imageUrl,
+        gallery: gallery.length ? gallery : (imageUrl ? [imageUrl] : []),
         airbnb_url: String(data.airbnb_url ?? current.airbnb_url).trim(),
         allow_direct: data.allow_direct === undefined ? current.allow_direct : Boolean(data.allow_direct),
         currency: String(data.currency ?? current.currency).toUpperCase().slice(0, 3),
