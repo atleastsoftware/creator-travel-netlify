@@ -40,7 +40,7 @@
       <div class="table-wrap">
         <table>
           <thead><tr><th>Stay</th><th>Location</th><th>Direct</th><th>Nightly</th><th>Commission</th><th>Status</th><th></th></tr></thead>
-          <tbody id="propertiesBody"></tbody>
+          <tbody id="propertiesBody"><tr><td colspan="7" class="muted">Loading listings…</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -50,7 +50,7 @@
       <div class="table-wrap">
         <table>
           <thead><tr><th>Property</th><th>Guest</th><th>Dates</th><th>Total</th><th>Commission</th><th>Ref</th><th>Status</th></tr></thead>
-          <tbody id="bookingsBody"></tbody>
+          <tbody id="bookingsBody"><tr><td colspan="7" class="muted">Loading bookings…</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -81,6 +81,7 @@
 <script src="/app.js"></script>
 <script>
 let props = [], me = null;
+const DASHBOARD_API = '/.netlify/functions/dashboard';
 
 function decodeSessionToken(rawToken) {
   try {
@@ -104,7 +105,6 @@ function guard() {
     location.replace('/login.html');
     throw new Error('No valid session');
   }
-
   me = session;
   $('#who').textContent = `${me.name || me.email || 'Creator'} • ${me.role || 'creator'}`;
   return me;
@@ -120,8 +120,8 @@ function row(p) {
 
 async function load() {
   const [ps, st] = await Promise.all([
-    api('/api/dashboard/properties'),
-    api('/api/dashboard/stats')
+    api(`${DASHBOARD_API}?action=properties`),
+    api(`${DASHBOARD_API}?action=stats`)
   ]);
   props = ps;
   $('#propertiesBody').innerHTML = ps.map(row).join('') || '<tr><td colspan="7">No listings yet.</td></tr>';
@@ -168,17 +168,7 @@ function closeModal() {
   $('#modal').setAttribute('aria-hidden', 'true');
 }
 
-(async () => {
-  guard();
-  await applyConfig();
-
-  try {
-    await load();
-  } catch (err) {
-    $('#dashboardError').textContent = `Dashboard data error: ${err.message}`;
-    $('#dashboardError').classList.remove('hidden');
-  }
-
+function bindUI() {
   $('#newProperty').addEventListener('click', () => openModal());
   $('#close').addEventListener('click', closeModal);
   $('#modal').addEventListener('click', e => {
@@ -208,11 +198,18 @@ function closeModal() {
     $('#formError').textContent = '';
 
     try {
-      await api(propertyId ? `/api/dashboard/properties/${propertyId}` : '/api/dashboard/properties', {
+      const url = propertyId
+        ? `${DASHBOARD_API}?action=properties&id=${encodeURIComponent(propertyId)}`
+        : `${DASHBOARD_API}?action=properties`;
+      const saved = await api(url, {
         method: propertyId ? 'PUT' : 'POST',
         body: JSON.stringify(d)
       });
       closeModal();
+      if (!propertyId) {
+        props = [saved, ...props.filter(p => p.id !== saved.id)];
+        $('#propertiesBody').innerHTML = props.map(row).join('');
+      }
       await load();
     } catch (err) {
       $('#formError').textContent = err.message;
@@ -221,6 +218,26 @@ function closeModal() {
       submit.textContent = 'Save listing';
     }
   });
+}
+
+(async () => {
+  guard();
+  bindUI();
+
+  try {
+    await applyConfig();
+  } catch (err) {
+    console.warn('Config load failed', err);
+  }
+
+  try {
+    await load();
+  } catch (err) {
+    $('#dashboardError').textContent = `Dashboard data error: ${err.message}`;
+    $('#dashboardError').classList.remove('hidden');
+    $('#propertiesBody').innerHTML = '<tr><td colspan="7">Unable to load listings. You can still use “Add listing”.</td></tr>';
+    $('#bookingsBody').innerHTML = '<tr><td colspan="7">Unable to load bookings.</td></tr>';
+  }
 })();
 </script>
 </body>
