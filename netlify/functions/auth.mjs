@@ -17,6 +17,29 @@ function tokenSign(payload) {
   return `${data}.${sig}`;
 }
 
+function tokenVerify(token) {
+  try {
+    const [data, sig] = String(token || "").split(".");
+    if (!data || !sig) return null;
+    const secret = process.env.SESSION_SECRET || "dev-secret-change-me";
+    const expected = crypto.createHmac("sha256", secret).update(data).digest("base64url");
+    const A = Buffer.from(sig);
+    const B = Buffer.from(expected);
+    if (A.length !== B.length || !crypto.timingSafeEqual(A, B)) return null;
+    const payload = JSON.parse(Buffer.from(data, "base64url").toString("utf8"));
+    if (!payload.exp || payload.exp < Date.now()) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function bearerUser(request) {
+  const raw = String(request.headers.get("authorization") || "");
+  const token = raw.replace(/^Bearer\s+/i, "");
+  return tokenVerify(token);
+}
+
 function safeEqual(a, b) {
   const A = Buffer.from(String(a || ""));
   const B = Buffer.from(String(b || ""));
@@ -57,10 +80,9 @@ function resolveAction(request) {
   const url = new URL(request.url);
   const queryAction = String(url.searchParams.get("action") || "").toLowerCase();
   if (queryAction) return queryAction;
-
   const parts = url.pathname.split("/").filter(Boolean);
   const last = String(parts.at(-1) || "").toLowerCase();
-  return ["status", "profile", "signup", "login"].includes(last) ? last : "";
+  return ["status", "profile", "signup", "login", "me"].includes(last) ? last : "";
 }
 
 export default async (request) => {
@@ -81,6 +103,19 @@ export default async (request) => {
           handle: creator.handle || "",
           email: creator.email
         } : null
+      });
+    }
+
+    if (method === "GET" && action === "me") {
+      const user = bearerUser(request);
+      if (!user) return json({ error: "Unauthorized" }, 401);
+      return json({
+        user: {
+          email: user.email,
+          role: user.role,
+          name: user.name || "Creator",
+          handle: user.handle || ""
+        }
       });
     }
 
@@ -183,8 +218,7 @@ export default async (request) => {
     console.error("Creator auth function error", error);
     return json({
       error: "Account service unavailable. Please retry in a moment.",
-      code: "CREATOR_AUTH_ERROR",
-      detail: process.env.NODE_ENV === "development" ? String(error?.message || error) : undefined
+      code: "CREATOR_AUTH_ERROR"
     }, 500);
   }
 };
