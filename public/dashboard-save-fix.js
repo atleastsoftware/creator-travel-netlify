@@ -61,7 +61,6 @@
     const status = qs('#uploadStatus');
     const errorBox = qs('#formError');
     if (!submit || submit.dataset.saving === '1') return;
-
     if (!form.reportValidity()) return;
 
     submit.dataset.saving = '1';
@@ -80,7 +79,6 @@
         uploadNumber += 1;
         const img = item.querySelector('img');
         if (!img?.src) throw new Error(`Photo ${uploadNumber} preview is unavailable.`);
-
         const localResponse = await fetch(img.src);
         if (!localResponse.ok) throw new Error(`Could not read photo ${uploadNumber}.`);
         const blob = await localResponse.blob();
@@ -131,8 +129,8 @@
 
       status.textContent = 'Listing saved successfully ✓';
       submit.textContent = 'Saved ✓';
+      await new Promise(r => setTimeout(r, 450));
 
-      await new Promise(r => setTimeout(r, 500));
       if (typeof closeModal === 'function') closeModal();
       if (typeof load === 'function') {
         try { await load(); }
@@ -152,14 +150,15 @@
     }
   }
 
-  window.addEventListener('load', () => {
+  function init() {
     const form = qs('#pf');
-    if (!form) return;
-
-    // Capture phase runs before the older dashboard submit listener.
+    if (!form || form.dataset.reliableSaveBound === '1') return;
+    form.dataset.reliableSaveBound = '1';
     form.addEventListener('submit', saveListing, true);
-
     const submit = form.querySelector('button[type="submit"]');
     if (submit) submit.title = 'Uploads photos first, then saves the listing';
-  });
+  }
+
+  if (document.readyState === 'complete') init();
+  else window.addEventListener('load', init, { once: true });
 })();
