@@ -3,14 +3,14 @@ const crypto = require("crypto");
 const USERS_STORE = "creator-users";
 let blobsPromise;
 
-async function blobs() {
+async function getBlobsModule() {
   if (!blobsPromise) blobsPromise = import("@netlify/blobs");
   return blobsPromise;
 }
 
 async function usersStore() {
-  const { getStore } = await blobs();
-  return getStore({ name: USERS_STORE, consistency: "strong" });
+  const { getStore } = await getBlobsModule();
+  return getStore(USERS_STORE);
 }
 
 function response(statusCode, body) {
@@ -65,123 +65,136 @@ async function saveCreator(creator) {
   return store.setJSON("creator-owner", creator);
 }
 
-function pathFromEvent(event) {
-  const raw = event.path || "";
-  return raw.replace(/^\/auth\/?/, "/").replace(/^\/\.netlify\/functions\/auth\/?/, "/");
+function resolveAction(event) {
+  const queryAction = String(event.queryStringParameters?.action || "").toLowerCase();
+  if (queryAction) return queryAction;
+
+  const raw = String(event.path || "");
+  const match = raw.match(/(?:\/auth\/|\/\.netlify\/functions\/auth\/)(status|profile|signup|login)\/?$/i);
+  return match ? match[1].toLowerCase() : "";
 }
 
 exports.handler = async (event) => {
-  const path = pathFromEvent(event);
-  const method = event.httpMethod || "GET";
+  try {
+    const action = resolveAction(event);
+    const method = event.httpMethod || "GET";
 
-  if (method === "GET" && path === "/status") {
-    const creator = await getCreator();
-    return response(200, { available: !creator });
-  }
-
-  if (method === "GET" && path === "/profile") {
-    const creator = await getCreator();
-    return response(200, {
-      creator: creator ? {
-        name: creator.name,
-        handle: creator.handle || "",
-        email: creator.email
-      } : null
-    });
-  }
-
-  if (method === "POST" && path === "/signup") {
-    const existing = await getCreator();
-    if (existing) {
-      return response(409, { error: "The creator account has already been created for this storefront." });
-    }
-
-    let data = {};
-    try { data = JSON.parse(event.body || "{}"); } catch {}
-
-    const name = String(data.name || "").trim().slice(0, 100);
-    const rawHandle = String(data.handle || "").trim().slice(0, 60);
-    const handle = rawHandle ? (rawHandle.startsWith("@") ? rawHandle : `@${rawHandle}`) : "";
-    const email = String(data.email || "").trim().toLowerCase().slice(0, 200);
-    const password = String(data.password || "");
-
-    if (name.length < 2) return response(400, { error: "Please enter your creator name." });
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return response(400, { error: "Please enter a valid email address." });
-    if (password.length < 8) return response(400, { error: "Password must contain at least 8 characters." });
-
-    const adminEmail = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase();
-    if (adminEmail && email === adminEmail) {
-      return response(400, { error: "This email is reserved for the administrator account." });
-    }
-
-    const { salt, hash } = hashPassword(password);
-    const creator = {
-      id: "creator-owner",
-      role: "creator",
-      name,
-      handle,
-      email,
-      password_salt: salt,
-      password_hash: hash,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-    await saveCreator(creator);
-
-    const user = { email, role: "creator", name, handle };
-    return response(201, {
-      token: tokenSign({ ...user, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 }),
-      user
-    });
-  }
-
-  if (method === "POST" && path === "/login") {
-    let data = {};
-    try { data = JSON.parse(event.body || "{}"); } catch {}
-
-    const email = String(data.email || "").trim().toLowerCase();
-    const password = String(data.password || "");
-    let user = null;
-
-    if (
-      email === String(process.env.ADMIN_EMAIL || "admin@example.com").toLowerCase() &&
-      safeEqual(password, process.env.ADMIN_PASSWORD || "replace-me")
-    ) {
-      user = { email, role: "admin", name: "Admin", handle: "" };
-    } else {
+    if (method === "GET" && action === "status") {
       const creator = await getCreator();
-      if (
-        creator &&
-        email === creator.email &&
-        verifyPassword(password, creator.password_salt, creator.password_hash)
-      ) {
-        user = {
-          email: creator.email,
-          role: "creator",
-          name: creator.name,
-          handle: creator.handle || ""
-        };
-      } else if (
-        !creator &&
-        email === String(process.env.CREATOR_EMAIL || "creator@example.com").toLowerCase() &&
-        safeEqual(password, process.env.CREATOR_PASSWORD || "replace-me")
-      ) {
-        user = {
-          email,
-          role: "creator",
-          name: process.env.CREATOR_NAME || "Creator",
-          handle: process.env.CREATOR_HANDLE || "@creator"
-        };
-      }
+      return response(200, { available: !creator });
     }
 
-    if (!user) return response(401, { error: "Invalid email or password" });
+    if (method === "GET" && action === "profile") {
+      const creator = await getCreator();
+      return response(200, {
+        creator: creator ? {
+          name: creator.name,
+          handle: creator.handle || "",
+          email: creator.email
+        } : null
+      });
+    }
 
-    return response(200, {
-      token: tokenSign({ ...user, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 }),
-      user
+    if (method === "POST" && action === "signup") {
+      const existing = await getCreator();
+      if (existing) {
+        return response(409, { error: "The creator account has already been created for this storefront." });
+      }
+
+      let data = {};
+      try { data = JSON.parse(event.body || "{}"); } catch {}
+
+      const name = String(data.name || "").trim().slice(0, 100);
+      const rawHandle = String(data.handle || "").trim().slice(0, 60);
+      const handle = rawHandle ? (rawHandle.startsWith("@") ? rawHandle : `@${rawHandle}`) : "";
+      const email = String(data.email || "").trim().toLowerCase().slice(0, 200);
+      const password = String(data.password || "");
+
+      if (name.length < 2) return response(400, { error: "Please enter your creator name." });
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return response(400, { error: "Please enter a valid email address." });
+      if (password.length < 8) return response(400, { error: "Password must contain at least 8 characters." });
+
+      const adminEmail = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+      if (adminEmail && email === adminEmail) {
+        return response(400, { error: "This email is reserved for the administrator account." });
+      }
+
+      const { salt, hash } = hashPassword(password);
+      const creator = {
+        id: "creator-owner",
+        role: "creator",
+        name,
+        handle,
+        email,
+        password_salt: salt,
+        password_hash: hash,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+
+      await saveCreator(creator);
+
+      const user = { email, role: "creator", name, handle };
+      return response(201, {
+        token: tokenSign({ ...user, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 }),
+        user
+      });
+    }
+
+    if (method === "POST" && action === "login") {
+      let data = {};
+      try { data = JSON.parse(event.body || "{}"); } catch {}
+
+      const email = String(data.email || "").trim().toLowerCase();
+      const password = String(data.password || "");
+      let user = null;
+
+      if (
+        email === String(process.env.ADMIN_EMAIL || "admin@example.com").toLowerCase() &&
+        safeEqual(password, process.env.ADMIN_PASSWORD || "replace-me")
+      ) {
+        user = { email, role: "admin", name: "Admin", handle: "" };
+      } else {
+        const creator = await getCreator();
+        if (
+          creator &&
+          email === creator.email &&
+          verifyPassword(password, creator.password_salt, creator.password_hash)
+        ) {
+          user = {
+            email: creator.email,
+            role: "creator",
+            name: creator.name,
+            handle: creator.handle || ""
+          };
+        } else if (
+          !creator &&
+          email === String(process.env.CREATOR_EMAIL || "creator@example.com").toLowerCase() &&
+          safeEqual(password, process.env.CREATOR_PASSWORD || "replace-me")
+        ) {
+          user = {
+            email,
+            role: "creator",
+            name: process.env.CREATOR_NAME || "Creator",
+            handle: process.env.CREATOR_HANDLE || "@creator"
+          };
+        }
+      }
+
+      if (!user) return response(401, { error: "Invalid email or password" });
+
+      return response(200, {
+        token: tokenSign({ ...user, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 }),
+        user
+      });
+    }
+
+    return response(404, { error: "Not found" });
+  } catch (error) {
+    console.error("Creator auth function error", error);
+    return response(500, {
+      error: "Account service unavailable. Please retry in a moment.",
+      code: "CREATOR_AUTH_ERROR"
     });
   }
-
-  return response(404, { error: "Not found" });
 };
