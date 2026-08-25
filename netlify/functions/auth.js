@@ -76,6 +76,13 @@ function resolveAction(event) {
 
 exports.handler = async (event) => {
   try {
+    // Netlify Blobs requires explicit initialization when a Function uses
+    // Lambda compatibility mode (event/context handler syntax).
+    const blobsModule = await getBlobsModule();
+    if (typeof blobsModule.connectLambda === "function") {
+      blobsModule.connectLambda(event);
+    }
+
     const action = resolveAction(event);
     const method = event.httpMethod || "GET";
 
