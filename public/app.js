@@ -11,7 +11,7 @@ if(location.pathname.endsWith('/dashboard.html')||location.pathname.endsWith('/d
   window.addEventListener('load',()=>{
     if(document.querySelector('script[data-dashboard-save-fix]'))return;
     const s=document.createElement('script');
-    s.src='/dashboard-save-fix.js?v=2';
+    s.src='/dashboard-save-fix.js?v=3';
     s.dataset.dashboardSaveFix='1';
     document.body.appendChild(s);
   });
