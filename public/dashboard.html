@@ -62,10 +62,24 @@
     <div class="toolbar"><h2 id="modalTitle">Add listing</h2><button type="button" class="btn secondary" id="close">Close</button></div>
     <form id="pf">
       <input type="hidden" name="property_id">
+      <input type="hidden" name="image_url">
       <div class="row"><div class="field"><label>Title</label><input name="title" required></div><div class="field"><label>Slug</label><input name="slug"></div></div>
       <div class="row"><div class="field"><label>City / Area</label><input name="location"></div><div class="field"><label>Country</label><input name="country"></div></div>
       <div class="field"><label>Description</label><textarea name="description"></textarea></div>
-      <div class="field"><label>Cover image URL</label><input name="image_url" placeholder="https://..."></div>
+
+      <div class="field">
+        <label>Photos</label>
+        <label class="upload-zone" for="listingImages">
+          <span class="upload-icon">＋</span>
+          <strong>Add photos</strong>
+          <span>Choose from your phone or computer</span>
+          <input id="listingImages" name="images" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+        </label>
+        <div class="small muted">Up to 12 photos. The first photo is used as the cover. Photos are optimized before upload.</div>
+        <div id="imagePreview" class="image-preview-grid"></div>
+        <div id="uploadStatus" class="small muted"></div>
+      </div>
+
       <div class="field"><label>Airbnb link</label><input name="airbnb_url" placeholder="https://www.airbnb.com/rooms/..."></div>
       <div class="row"><div class="field"><label>Currency</label><select name="currency"><option>EUR</option><option>USD</option><option>THB</option><option>SGD</option><option>GBP</option></select></div><div class="field"><label>Nightly price</label><input type="number" step=".01" min="0" name="nightly_price"></div></div>
       <div class="row"><div class="field"><label>Cleaning fee</label><input type="number" step=".01" min="0" name="cleaning_fee"></div><div class="field"><label>Minimum nights</label><input type="number" min="1" name="min_nights" value="1"></div></div>
@@ -81,7 +95,10 @@
 <script src="/app.js"></script>
 <script>
 let props = [], me = null;
+let existingGallery = [];
+let pendingFiles = [];
 const DASHBOARD_API = '/.netlify/functions/dashboard';
+const UPLOAD_API = '/.netlify/functions/upload';
 
 function decodeSessionToken(rawToken) {
   try {
@@ -92,9 +109,7 @@ function decodeSessionToken(rawToken) {
     const payload = JSON.parse(decodeURIComponent(escape(atob(padded))));
     if (!payload.exp || payload.exp < Date.now()) return null;
     return payload;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 function guard() {
@@ -110,10 +125,7 @@ function guard() {
   return me;
 }
 
-function formField(form, name) {
-  return form.elements.namedItem(name);
-}
-
+function formField(form, name) { return form.elements.namedItem(name); }
 function row(p) {
   return `<tr><td><b>${esc(p.title)}</b><div class="small muted">/${esc(p.slug)}</div></td><td>${esc(p.location)}, ${esc(p.country)}</td><td>${p.allow_direct?'Yes':'No'}</td><td>${money(p.nightly_price_cents,p.currency)}</td><td>${p.commission_percent}%</td><td>${p.published?'Published':'Hidden'}</td><td><button type="button" class="btn secondary edit" data-id="${p.id}">Edit</button></td></tr>`;
 }
@@ -133,17 +145,46 @@ async function load() {
   $('#bookingsBody').innerHTML = st.recent.map(b => `<tr><td>${esc(b.property_title)}</td><td>${esc(b.guest_name)}</td><td>${esc(b.check_in)} → ${esc(b.check_out)}</td><td>${money(b.total_cents,b.currency)}</td><td>${money(b.commission_cents,b.currency)}</td><td>${esc(b.referral_code||'—')}</td><td><span class="badge ${esc(b.payment_status)}">${esc(b.payment_status)}</span></td></tr>`).join('') || '<tr><td colspan="7">No bookings yet.</td></tr>';
 }
 
+function previewUrl(file) {
+  if (!file._previewUrl) file._previewUrl = URL.createObjectURL(file);
+  return file._previewUrl;
+}
+
+function renderImagePreviews() {
+  const items = [];
+  existingGallery.forEach((url, i) => items.push({ type:'existing', index:i, url }));
+  pendingFiles.forEach((file, i) => items.push({ type:'pending', index:i, url:previewUrl(file) }));
+  $('#imagePreview').innerHTML = items.map((item, position) => `
+    <div class="image-preview-item">
+      <img src="${esc(item.url)}" alt="Listing photo ${position + 1}">
+      ${position === 0 ? '<span class="cover-pill">Cover</span>' : ''}
+      <button type="button" class="image-remove" data-type="${item.type}" data-index="${item.index}" aria-label="Remove image">×</button>
+    </div>`).join('');
+  $('#uploadStatus').textContent = items.length ? `${items.length}/12 photo${items.length > 1 ? 's' : ''}` : 'No photos added yet.';
+}
+
+function resetImages(p = null) {
+  pendingFiles.forEach(file => { if (file._previewUrl) URL.revokeObjectURL(file._previewUrl); });
+  pendingFiles = [];
+  existingGallery = p
+    ? (Array.isArray(p.gallery) && p.gallery.length ? [...p.gallery] : (p.image_url ? [p.image_url] : []))
+    : [];
+  renderImagePreviews();
+}
+
 function openModal(p = null) {
   const f = $('#pf');
   f.reset();
   $('#formError').textContent = '';
   formField(f, 'property_id').value = p?.id || '';
+  resetImages(p);
 
   if (p) {
     $('#modalTitle').textContent = 'Edit listing';
-    ['title','location','country','description','image_url','airbnb_url','currency','min_nights','commission_percent'].forEach(name => {
+    ['title','location','country','description','airbnb_url','currency','min_nights','commission_percent'].forEach(name => {
       formField(f, name).value = p[name] ?? '';
     });
+    formField(f, 'image_url').value = p.image_url || '';
     formField(f, 'nightly_price').value = (p.nightly_price_cents / 100).toFixed(2);
     formField(f, 'cleaning_fee').value = (p.cleaning_fee_cents / 100).toFixed(2);
     formField(f, 'allow_direct').checked = Boolean(p.allow_direct);
@@ -168,12 +209,46 @@ function closeModal() {
   $('#modal').setAttribute('aria-hidden', 'true');
 }
 
+async function compressImage(file) {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const max = 1800;
+    const scale = Math.min(1, max / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close?.();
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.84));
+    if (!blob) return file;
+    return new File([blob], `${file.name.replace(/\.[^.]+$/, '') || 'photo'}.jpg`, { type:'image/jpeg' });
+  } catch {
+    return file;
+  }
+}
+
+async function uploadImage(file, index, total) {
+  $('#uploadStatus').textContent = `Optimizing and uploading photo ${index}/${total}…`;
+  const optimized = await compressImage(file);
+  const fd = new FormData();
+  fd.append('image', optimized, optimized.name || 'photo.jpg');
+  const r = await fetch(UPLOAD_API, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token()}` },
+    body: fd
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `Photo ${index} upload failed`);
+  return data.url;
+}
+
 function bindUI() {
   $('#newProperty').addEventListener('click', () => openModal());
   $('#close').addEventListener('click', closeModal);
-  $('#modal').addEventListener('click', e => {
-    if (e.target === $('#modal')) closeModal();
-  });
+  $('#modal').addEventListener('click', e => { if (e.target === $('#modal')) closeModal(); });
   $('#propertiesBody').addEventListener('click', e => {
     const b = e.target.closest('.edit');
     if (b) openModal(props.find(p => p.id === b.dataset.id));
@@ -183,36 +258,63 @@ function bindUI() {
     location.replace('/login.html');
   });
 
+  $('#listingImages').addEventListener('change', e => {
+    const incoming = [...e.target.files].filter(file => /^image\/(jpeg|png|webp)$/i.test(file.type));
+    const room = Math.max(0, 12 - existingGallery.length - pendingFiles.length);
+    pendingFiles.push(...incoming.slice(0, room));
+    e.target.value = '';
+    renderImagePreviews();
+  });
+
+  $('#imagePreview').addEventListener('click', e => {
+    const btn = e.target.closest('.image-remove');
+    if (!btn) return;
+    const index = Number(btn.dataset.index);
+    if (btn.dataset.type === 'existing') existingGallery.splice(index, 1);
+    else {
+      const [removed] = pendingFiles.splice(index, 1);
+      if (removed?._previewUrl) URL.revokeObjectURL(removed._previewUrl);
+    }
+    renderImagePreviews();
+  });
+
   $('#pf').addEventListener('submit', async e => {
     e.preventDefault();
     const f = e.currentTarget;
     const propertyId = formField(f, 'property_id').value;
-    const d = Object.fromEntries(new FormData(f).entries());
-    delete d.property_id;
-    d.allow_direct = formField(f, 'allow_direct').checked;
-    d.published = formField(f, 'published').checked;
-
     const submit = f.querySelector('button[type="submit"]');
     submit.disabled = true;
-    submit.textContent = propertyId ? 'Updating…' : 'Publishing…';
     $('#formError').textContent = '';
 
     try {
+      const uploaded = [];
+      for (let i = 0; i < pendingFiles.length; i++) {
+        uploaded.push(await uploadImage(pendingFiles[i], i + 1, pendingFiles.length));
+      }
+
+      const gallery = [...existingGallery, ...uploaded].slice(0, 12);
+      const d = Object.fromEntries(new FormData(f).entries());
+      delete d.property_id;
+      delete d.images;
+      d.gallery = gallery;
+      d.image_url = gallery[0] || '';
+      d.allow_direct = formField(f, 'allow_direct').checked;
+      d.published = formField(f, 'published').checked;
+
+      submit.textContent = propertyId ? 'Updating…' : 'Publishing…';
       const url = propertyId
         ? `${DASHBOARD_API}?action=properties&id=${encodeURIComponent(propertyId)}`
         : `${DASHBOARD_API}?action=properties`;
-      const saved = await api(url, {
+      await api(url, {
         method: propertyId ? 'PUT' : 'POST',
         body: JSON.stringify(d)
       });
+
       closeModal();
-      if (!propertyId) {
-        props = [saved, ...props.filter(p => p.id !== saved.id)];
-        $('#propertiesBody').innerHTML = props.map(row).join('');
-      }
       await load();
     } catch (err) {
       $('#formError').textContent = err.message;
+      $('#uploadStatus').textContent = 'Upload stopped. You can retry without selecting the photos again.';
     } finally {
       submit.disabled = false;
       submit.textContent = 'Save listing';
@@ -223,16 +325,9 @@ function bindUI() {
 (async () => {
   guard();
   bindUI();
-
-  try {
-    await applyConfig();
-  } catch (err) {
-    console.warn('Config load failed', err);
-  }
-
-  try {
-    await load();
-  } catch (err) {
+  try { await applyConfig(); } catch (err) { console.warn('Config load failed', err); }
+  try { await load(); }
+  catch (err) {
     $('#dashboardError').textContent = `Dashboard data error: ${err.message}`;
     $('#dashboardError').classList.remove('hidden');
     $('#propertiesBody').innerHTML = '<tr><td colspan="7">Unable to load listings. You can still use “Add listing”.</td></tr>';
