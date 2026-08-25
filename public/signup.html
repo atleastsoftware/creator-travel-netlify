@@ -34,14 +34,17 @@
 </main>
 <script src="/app.js"></script>
 <script>
+const AUTH_ENDPOINT="/.netlify/functions/auth";
 (async()=>{
   try{
-    const status=await api("/auth/status");
+    const status=await api(`${AUTH_ENDPOINT}?action=status`);
     if(!status.available){
       $("#form").classList.add("hidden");
       $("#closed").classList.remove("hidden");
     }
-  }catch{}
+  }catch(err){
+    console.warn("Creator account status unavailable",err);
+  }
 
   $("#form").onsubmit=async e=>{
     e.preventDefault();
@@ -56,7 +59,7 @@
     btn.disabled=true;
     btn.textContent="Creating account…";
     try{
-      const d=await api("/auth/signup",{method:"POST",body:JSON.stringify(data)});
+      const d=await api(`${AUTH_ENDPOINT}?action=signup`,{method:"POST",body:JSON.stringify(data)});
       localStorage.setItem("creator_token",d.token);
       location.href="/dashboard.html";
     }catch(err){
