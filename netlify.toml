@@ -7,6 +7,12 @@
   NODE_VERSION = "20"
 
 [[redirects]]
+  from = "/media/*"
+  to = "/.netlify/functions/upload/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/auth/*"
   to = "/.netlify/functions/auth/:splat"
   status = 200
